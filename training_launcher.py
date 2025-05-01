@@ -7,6 +7,9 @@ import argparse
 import multiprocessing
 import driver
 
+# launch command
+# python training_launcher.py --instances 4 --maxEpisodes 10 --maxSteps 500 --stage 2
+
 def launch_torcs_instance(instance_id, base_port):
     # Set unique ports for each instance
     vision_port = base_port + instance_id * 10
