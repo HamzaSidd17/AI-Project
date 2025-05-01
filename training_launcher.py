@@ -18,6 +18,7 @@ def launch_torcs_instance(instance_id, base_port):
     env['TORCS_CONTROL_PORT'] = str(control_port)
 
     # Dynamically get the absolute path to the TORCS directory and executable
+    # copy torcs into project folder or provide your path here
     current_dir = os.path.dirname(os.path.abspath(__file__))
     torcs_dir = os.path.join(current_dir, 'torcs')
     torcs_executable = os.path.join(torcs_dir, 'wtorcs.exe')
