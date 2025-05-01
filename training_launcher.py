@@ -17,15 +17,18 @@ def launch_torcs_instance(instance_id, base_port):
     env['TORCS_PORT'] = str(vision_port)
     env['TORCS_CONTROL_PORT'] = str(control_port)
 
-    # Specify the full path to the TORCS executable
-    torcs_executable = r'D:\torcs\wtorcs.exe'
+    # Dynamically get the absolute path to the TORCS directory and executable
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    torcs_dir = os.path.join(current_dir, 'torcs')
+    torcs_executable = os.path.join(torcs_dir, 'wtorcs.exe')
 
-    # Launch the TORCS instance with visible GUI
-    subprocess.Popen([torcs_executable, '-p', str(vision_port)], env=env)
+    # Set working directory (cwd) to the TORCS folder so it finds data/
+    # subprocess.Popen([torcs_executable, '-p', str(vision_port)], env=env, cwd=torcs_dir)
+    subprocess.Popen(f'start "" "{torcs_executable}" -p {vision_port}', shell=True, env=env, cwd=torcs_dir)
+
     print(f"[INFO] Launched TORCS instance {instance_id} on ports {vision_port} and {control_port}")
-    time.sleep(5)  # Wait for the TORCS GUI to fully load
+    time.sleep(5)
     return vision_port, control_port
-
 
 def run_bot(instance_id, host_ip, vision_port, bot_id, max_episodes, max_steps, track, stage):
     try:
@@ -63,9 +66,11 @@ def run_bot(instance_id, host_ip, vision_port, bot_id, max_episodes, max_steps, 
 
         currentStep = 0
         while True:
+            buf = None
             try:
                 buf, addr = sock.recvfrom(1000)
                 buf = buf.decode('utf-8')
+                print(f"[BOT-{instance_id}] Received: {buf}")
             except socket.error:
                 print(f"[BOT-{instance_id}] Waiting for data...")
 
@@ -84,7 +89,7 @@ def run_bot(instance_id, host_ip, vision_port, bot_id, max_episodes, max_steps, 
 
             currentStep += 1
             if currentStep != max_steps:
-                if buf:
+                if buf != None:
                     buf = d.drive(buf)
                     print(f"[BOT-{instance_id}] Driving data: {buf}")
             else:
@@ -96,9 +101,9 @@ def run_bot(instance_id, host_ip, vision_port, bot_id, max_episodes, max_steps, 
             if buf:
                 try:
                     sock.sendto(buf.encode(), (host_ip, vision_port))
-                except socket.error:
-                    print(f"[ERROR] Instance {instance_id}: Failed to send data. Exiting...")
-                    return
+                except socket.error as msg:
+                    print(f"[BOT-{instance_id}] Failed to send data...Exiting...")
+                    sys.exit(-1)
 
         curEpisode += 1
         if curEpisode == max_episodes:
