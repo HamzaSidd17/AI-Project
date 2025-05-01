@@ -78,6 +78,7 @@ class Driver(object):
         self.control.setSteer(steer)
         self.control.setAccel(accel)
         self.control.setBrake(brake)
+        self.gear()
         # self.control.setGear(self.decide_gear(gear))
 
         # print self.state.sensors 
