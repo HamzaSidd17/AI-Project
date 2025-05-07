@@ -35,7 +35,8 @@ class Driver(object):
         # self.writer_thread = threading.Thread(target=self.csv_update)
         # self.writer_thread.daemon = True
         # self.writer_thread.start()
-    
+    def getNueralNetwork(self):
+        return self.nn
     def init(self):
         '''Return init string with rangefinder angles'''
         self.angles = [0 for x in range(19)]
@@ -53,8 +54,8 @@ class Driver(object):
     def stop(self):
         """Stop the CSV writing thread"""
         self.running = False
-        self.writer_thread.join()
-    
+        if hasattr(self, 'writer_thread') and self.writer_thread is not None:
+            self.writer_thread.join()    
     def csv_update(self): 
         self.running = True
         while self.running:
@@ -70,52 +71,62 @@ class Driver(object):
 
         accel, steer, brake = self.nn.feed_forward()
 
-        if accel > brake:
-            brake = 0.0
-        else:
-            accel = 0.0
-
+        # Steering control
         self.control.setSteer(steer)
+        # Apply our controlled acceleration and braking
         self.control.setAccel(accel)
         self.control.setBrake(brake)
+        # Handle gear changes
         self.gear()
-        # self.control.setGear(self.decide_gear(gear))
-
-        # print self.state.sensors 
-        # self.steer()
-        
-        # self.gear()
-        
-        # self.speed()
-        
-        return self.control.toMsg()
-        # return self.parser.stringify(self.state.sensors)
+        return self.control.toMsg(), [accel, steer, brake]
     
     def steer(self):
         angle = self.state.angle
         dist = self.state.trackPos
         
         self.control.setSteer((angle - dist*0.5)/self.steer_lock)
-    
+        return (angle - dist*0.5)/self.steer_lock
+    def getsteer(self):
+        angle = self.state.angle
+        dist = self.state.trackPos
+        return (angle - dist*0.5)/self.steer_lock
+
     def gear(self):
         rpm = self.state.getRpm()
+        speed = self.state.getSpeedX()
         gear = self.state.getGear()
-        
-        if self.prev_rpm == None:
-            up = True
-        else:
-            if (self.prev_rpm - rpm) < 0:
-                up = True
-            else:
-                up = False
-        
-        if up and rpm > 7000:
-            gear += 1
-        
-        if not up and rpm < 3000:
-            gear -= 1
+        MIN_MOVING_SPEED = 5  # km/h
+        GEAR_CHANGE_RPM_BUFFER = 500  # RPM buffer to prevent rapid shifting
+
+        # Initialize previous RPM if None
+        if self.prev_rpm is None:
+            self.prev_rpm = rpm
+
+        # Only consider gear changes if car is actually moving
+        if speed > MIN_MOVING_SPEED:
+            # Determine RPM trend (rising/falling)
+            rpm_rising = rpm > self.prev_rpm
+
+            # Upshift logic (only if RPM is rising and in safe range)
+            if rpm > (7000 - GEAR_CHANGE_RPM_BUFFER) and rpm_rising:
+                if gear < 6:  # Prevent exceeding max gear
+                    gear += 1
+
+            # Downshift logic (only if RPM is falling and in safe range)
+            elif rpm < (3000 + GEAR_CHANGE_RPM_BUFFER) and not rpm_rising:
+                if gear > 1:  # Prevent going below min gear
+                    gear -= 1
+
+        # Emergency stop detection (crash or spin)
+        if speed < MIN_MOVING_SPEED:
+            # Reset to first gear when stopped or damaged
+            gear = 1
+
+        # Ensure gear stays in valid range
+        gear = max(1, min(6, gear))
         
         self.control.setGear(gear)
+        self.prev_rpm = rpm  # Update RPM history
     
     def speed(self):
         speed = self.state.getSpeedX()
@@ -138,5 +149,9 @@ class Driver(object):
         pass
     
     def onRestart(self):
+        pass
+
+
+    def __del__(self):
         pass
         
