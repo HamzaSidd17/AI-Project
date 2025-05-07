@@ -11,6 +11,7 @@ class neuralNet:
         self.fitness_value = None
         self.steer_lock = 0.785398
         self.previous_damage = None
+        self.prev_rpm = 0
         # Initialize weights with Xavier Uniform
         for i in range(len(self.layer_sizes) - 1):
             fan_in = self.layer_sizes[i]
@@ -372,6 +373,36 @@ class neuralNet:
         # Ensure fitness doesn't go below a minimum threshold to prevent genetic stagnation
         self.fitness_value = max(fitnessV, 10.0)  
         return self.fitness_value
+    
+    def get_ideal_gear(self, speedX):
+        if speedX > 170:
+            return 6
+        elif speedX > 140:
+            return 5
+        elif speedX > 110:
+            return 4
+        elif speedX > 80:
+            return 3
+        elif speedX > 50:
+            return 2
+        else:
+            return 1
+
+    # call this function to get gear
+    def gear(self, rpm, speedX, current_gear):
+        rpm_rising = (rpm - self.prev_rpm) > 0
+        self.prev_rpm = rpm  
+
+        target_gear = self.get_ideal_gear(speedX)
+
+        if rpm_rising and rpm > 7000:
+            target_gear = max(current_gear + 1, target_gear)
+        elif not rpm_rising and rpm < 3000:
+            target_gear = min(current_gear - 1, target_gear)
+
+        target_gear = max(1, min(6, target_gear))
+
+        return target_gear
 
     def calculate_max_safe_speed(self, track_sensors):
         """
