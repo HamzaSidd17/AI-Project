@@ -1,10 +1,9 @@
 import numpy as np
 import math
-import numpy as np
 import carState
 class neuralNet:
     def __init__(self, input_size, hidden_sizes, output_size):
-        self.layer_sizes = [input_size] + hidden_sizes + [output_size]       
+        self.layer_sizes = [24] + [12] + [2]       
         self.input_vector = []
         self.weights = []
         self.biases = []
@@ -19,7 +18,7 @@ class neuralNet:
             w = np.random.uniform(-limit, limit, (fan_out, fan_in))
             self.weights.append(w)
 
-            # Initialize all biases to zero (no special bias for accel/brake)
+            # Initialize all biases to zero
             b = np.zeros((fan_out, 1))
             self.biases.append(b)
 
@@ -32,8 +31,10 @@ class neuralNet:
             gear / 6.0
         ]
 
-        # Normalize track sensors to [0, 1]
-        # Distance to the edge of the track is between 0 and 200
+        # Use only 3 track sensors: left (idx 0), front (idx 9), right (idx 18)
+        selected_sensors = [trackSensors[5], trackSensors[9], trackSensors[14]]
+        
+        # Normalize selected sensors to [0, 1]
         normalized_sensors = [min(s / 200.0, 1.0) for s in trackSensors]
         self.input_vector.extend(normalized_sensors)
 
@@ -52,10 +53,16 @@ class neuralNet:
         
         # Post-processing
         steer = np.tanh(output[0])        # [-1, 1] continuous 
-        accel = self.activation_sigmoid(output[1])  # [0, 1] continuous
-        
-        brake =  self.activation_sigmoid(output[2]) # Scale down brake values
-        brake = 0       
+        movement = np.tanh(output[1])  # [0, 1] continuous
+        if(movement < 0):
+            brake = abs(movement)
+            accel = 0.0
+        else:
+            brake = 0.0
+            accel = movement
+            
+        # brake = self.activation_sigmoid(output[2])  # [0, 1] continuous
+
         return accel, steer, brake 
     
     def get_genome(self):
@@ -81,7 +88,8 @@ class neuralNet:
     def fitness(self, state, output, lapCompleted=False):
         """
         Enhanced fitness function for racing car with better handling of track limits, 
-        acceleration, braking, and other racing characteristics.
+        acceleration, braking, and other racing characteristics. Added specific handling for
+        brake/acceleration coordination.
         
         Args:
             state: CarState object containing all car sensors and state information
@@ -101,13 +109,14 @@ class neuralNet:
             'steering_alignment': 10.0,  # For matching desired steering
             'cornering_efficiency': 15.0,# For smooth turns
             'stability': 10.0,           # For low sliding/rotation
-            'braking_efficiency': 8.0,   # For proper braking before corners
+            'braking_efficiency': 12.0,   # For proper braking before corners
             'acceleration_efficiency': 8.0, # For proper acceleration out of corners
             'gear_efficiency': 5.0,      # For proper RPM management
             'track_progression': 20.0,   # For consistent forward progress
             'damage_penalty': 50.0,      # Per damage point (increased penalty)
             'offtrack_penalty': 200.0,   # Immediate penalty (doubled)
-            'lap_completion': 8000.0     # Big bonus for completing laps (increased)
+            'lap_completion': 8000.0,    # Big bonus for completing laps (increased)
+            'control_coordination': 25.0 # New reward for proper control coordination
         }
         
         # Initialize state tracking if first call
@@ -124,7 +133,8 @@ class neuralNet:
                 'corner_count': 0,
                 'last_corner_entry': 0,
                 'accel': output[0],
-                'brake': output[2] if len(output) > 2 else 0
+                'brake': output[2] if len(output) > 2 else 0,
+                'start_phase': state.distRaced < 100  # Flag for start phase
             }
         
         # ========== Primary Rewards ==========
@@ -139,8 +149,12 @@ class neuralNet:
             # Extra reward for consistent forward progress
             progression_rate = distance_progress / (state.curLapTime - self.previous_state['time'] + 0.001)
             fitnessV += progression_rate * BASE_REWARDS['track_progression']
-        
-        # 2. Track Position (Advanced Bell Curve Reward)
+        if state.distRaced < 10 and state.speedX < 0.5:
+            # If the car is not moving and not accelerating, apply a small penalty
+            fitnessV -= 500
+        if state.distRaced == self.previous_state['distRaced']:
+            # If the car is not moving and not accelerating, apply a small penalty
+            fitnessV -= 1000
         # More forgiving near center, steeper penalty near edges
         track_pos_value = abs(state.trackPos)
         if track_pos_value <= 0.5:
@@ -153,8 +167,8 @@ class neuralNet:
         fitnessV += BASE_REWARDS['track_center'] * track_pos_score
         
         # 3. Dynamic Speed Control with curve analysis
-        max_safe_speed = self.calculate_max_safe_speed(state.track)
-        speed_ratio = min(state.speedX / max_safe_speed, 1.2)  # Cap at 120% of max safe speed
+        max_safe_speed= self.calculate_max_safe_speed(state.track)
+        speed_ratio = min(state.speedX / (max_safe_speed-30), 1.2)  # Cap at 120% of max safe speed
         
         # Progressive speed reward based on context
         if speed_ratio < 0.7:
@@ -234,18 +248,25 @@ class neuralNet:
         else:  # Straight or gentle curve
             # Full acceleration is appropriate
             accel_score = accel
-        
-        # Intelligent braking scoring
+        # Add new speed-based braking check
+        max_safe_speed = self.calculate_max_safe_speed(state.track)
+        if (state.speedX > max_safe_speed * 1.5 and 
+            ahead_curve > 0.6 and 
+            brake < 0.2):
+            fitnessV -= 200  # Severe penalty for dangerous speed in turns
+        # In the braking efficiency section:
         if ahead_curve > 0.7:  # Sharp curve ahead
-            # Should be braking
-            brake_score = brake
-        elif ahead_curve > 0.3:  # Moderate curve ahead
-            # Light braking may be appropriate
-            brake_score = 1.0 - abs(0.3 - brake)
-        else:  # Straight or gentle curve
-            # No braking needed
-            brake_score = 1.0 - brake
-        
+            # Should be braking - stronger incentive
+            brake_score = brake * 2.0  # Double the impact of braking
+            brake_score = min(brake_score, 1.0)  # Cap at 1.0 to prevent over-reward
+            # Direct penalty if speed exceeds safe limit and not braking
+            max_safe_speed = self.calculate_max_safe_speed(state.track)
+            if state.speedX > max_safe_speed * 1.2 and brake < 0.3:
+                fitnessV -= 100  # Significant penalty for not braking
+        elif ahead_curve > 0.3:  # Moderate curve
+            brake_score = 1.0 - abs(0.4 - brake)  # Wider optimal range
+        else:
+            brake_score = 1.0 - brake  # Penalize braking on straights
         # Apply rewards
         fitnessV += BASE_REWARDS['acceleration_efficiency'] * accel_score
         fitnessV += BASE_REWARDS['braking_efficiency'] * brake_score
@@ -253,6 +274,24 @@ class neuralNet:
         # 7. Gear and RPM Efficiency
         rpm_efficiency = 1.0 - abs((state.rpm - 6000) / 10000)  # Optimal RPM around 6000
         fitnessV += BASE_REWARDS['gear_efficiency'] * rpm_efficiency
+        
+        # ========== NEW: Control Coordination (Brake/Acceleration) ==========
+        # Severely penalize simultaneous braking and acceleration
+        
+        # Special handling for race start
+        if self.previous_state['start_phase']:
+            # During start phase, heavily penalize any braking
+            if brake > 0:
+                fitnessV -= 200 * brake  # Strong penalty for braking at start
+            
+            # Extra reward for strong acceleration from standstill
+            if state.speedX < 20 and accel > 0.8:
+                fitnessV += 50 * accel  # Bonus for proper launch
+                
+            # Check if we're past the start phase
+            if state.distRaced >= 100:
+                self.previous_state['start_phase'] = False
+                fitnessV += 100  # Bonus for successful launch phase
         
         # ========== Penalties ==========
         
@@ -370,7 +409,7 @@ class neuralNet:
         self.previous_state['brake'] = output[2] if len(output) > 2 else 0
 
         # Ensure fitness doesn't go below a minimum threshold to prevent genetic stagnation
-        self.fitness_value = max(fitnessV, 10.0)  
+        self.fitness_value = max(fitnessV,0.1)  
         return self.fitness_value
 
     def calculate_max_safe_speed(self, track_sensors):
@@ -392,16 +431,16 @@ class neuralNet:
         curvature_factor = (min_distance / 200.0) * (1.0 - min(std_dev / 50.0, 0.5))
         
         # Dynamic speed calculation - smoother transition
-        if curvature_factor < 0.3:
-            # Very sharp corner
-            return 50 + 100 * curvature_factor  # 50-80 km/h
-        elif curvature_factor < 0.6:
-            # Moderate corner
-            return 80 + 150 * (curvature_factor - 0.3) / 0.3  # 80-130 km/h
-        else:
-            # Gentle curve or straight
-            return 130 + 150 * (curvature_factor - 0.6) / 0.4  # 130-280 km/h
-
+        # if curvature_factor < 0.3:
+        #     # Very sharp corner
+        #     return 30 + 100 * curvature_factor -20  # 50-80 km/h
+        # elif curvature_factor < 0.6:
+        #     # Moderate corner
+        #     return 50 + 150 * (curvature_factor - 0.4) / 0.3  # 80-130 km/h
+        # else:
+        #     # Gentle curve or straight
+        #     return 110 + 150 * (curvature_factor - 0.7) / 0.4  # 130-280 km/h
+        return 50
     def get_desired_steering(self, state):
         """
         Calculate ideal steering using enhanced sensor fusion and prediction
@@ -539,5 +578,3 @@ class neuralNet:
             curvature = min(std_dev / 60.0, 1.0)
             return curvature
         return 0
-
-

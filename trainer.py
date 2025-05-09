@@ -3,9 +3,9 @@ import random
 import csv
 import os
 from neuralNet import neuralNet
-
+import time
 class Trainer:
-    def __init__(self, population_size=50, mutation_rate=0.3, elite_size=5):
+    def __init__(self, population_size=100, mutation_rate=0.1, elite_size=10):
         # Ensure minimum population size for tournament selection
         self.population_size = max(1, population_size)
         self.mutation_rate = mutation_rate
@@ -20,7 +20,8 @@ class Trainer:
         self.population = []
         self.fitness_scores = [0.0] * self.population_size
         for i in range(self.population_size):
-            nn = neuralNet(24, [16, 8], 3)
+            # Using 8 inputs (5 base + 3 track sensors) and 1 hidden layer of 12 neurons
+            nn = neuralNet(8, [12], 3)
             nn._index = i
             nn._trainer = self
             self.population.append(nn)
@@ -53,14 +54,14 @@ class Trainer:
         for i, score in enumerate(fitness_scores):
             if score is None:
                 raise ValueError(f"Fitness score for individual {i} is None")
-            validated_score = max(0.0, float(score))
+            validated_score = float(score)
             self.fitness_scores[i] = validated_score
             setattr(self.population[i], 'fitness_value', validated_score)
     
     def selection(self):
         """Tournament selection with increased pressure."""
         selected = []
-        tournament_size = min(5, len(self.population))  # Increased from 3
+        tournament_size = min(20, len(self.population))  # Increased from 3
         for _ in range(self.population_size):
             contestants = random.sample(list(enumerate(self.population)), tournament_size)
             winner_idx = max(contestants, key=lambda x: self.fitness_scores[x[0]])[0]
@@ -99,7 +100,7 @@ class Trainer:
     
     def create_next_generation(self):
         """Create new generation with diversity maintenance."""
-        try:
+        try:  
             # Sort population by fitness
             sorted_indices = np.argsort(self.fitness_scores)[::-1]
             sorted_pop = [self.population[i] for i in sorted_indices]
@@ -116,7 +117,7 @@ class Trainer:
                 current_best_fitness = self.fitness_scores[sorted_indices[0]]
                 self.best_fitness_history.append(current_best_fitness)
                 self.best_genome_history.append(sorted_pop[0].get_genome().copy())
-                
+
                 # Check for stagnation
                 if len(self.best_fitness_history) > 10:
                     recent_best = max(self.best_fitness_history[-10:])
@@ -132,7 +133,8 @@ class Trainer:
             
             # Selection
             parents = self.selection()
-            
+            print("Mutation rate:", self.mutation_rate)
+            time.sleep(1)
             # Crossover and mutation
             while len(new_population) < self.population_size:
                 try:
@@ -156,81 +158,103 @@ class Trainer:
                 
         except Exception as e:
             print(f"Error in generation creation: {e}")
-            self.population = self.initialize_population(24, [16, 8], 3)
+            # Reset with the new architecture: 8 inputs, 1 hidden layer with 12 neurons, 3 outputs
+            self.population = self.initialize_population(8, [12], 3)
             self.fitness_scores = [0.0] * self.population_size
-    
+
+
     def save_best_genome(self):
-        """Save all genomes with the best one at the top"""
+        """Save only unique genomes to CSV, avoiding duplicates"""
         try:
             if not self.best_genome_history:
                 return
-                
+
             os.makedirs("result", exist_ok=True)
-            filename = "result/best_genomes.csv"
-            
-            # Prepare header row
+            filename = "result/NewBraking_2.csv"
+
+            # Read existing genomes if file exists
+            existing_genomes = set()
+            if os.path.exists(filename):
+                with open(filename, 'r') as f:
+                    reader = csv.reader(f)
+                    next(reader)  # Skip header
+                    for row in reader:
+                        if len(row) > 2:  # Ensure row has genes
+                            # Convert genome part to tuple for hashability
+                            genome_tuple = tuple(float(gene) for gene in row[2:])
+                            existing_genomes.add(genome_tuple)
+
+            # Prepare new genomes to save (unique only)
+            new_genomes_to_save = []
             header = ['generation', 'fitness'] + [f'gene_{i}' for i in range(len(self.best_genome_history[0]))]
             
-            # Sort genomes by fitness (descending)
-            fitness_genome_pairs = list(zip(self.best_fitness_history, self.best_genome_history))
-            sorted_pairs = sorted(fitness_genome_pairs, key=lambda x: x[0], reverse=True)
-            
-            # Create rows for all genomes
-            rows = [header]
-            for i, (fitness, genome) in enumerate(sorted_pairs):
-                gen_num = i  # You might want to track actual generation numbers
-                rows.append([gen_num, fitness] + list(genome))
-            
-            # Write to file
-            with open(filename, 'w', newline='') as f:
+            # Check each genome in history for uniqueness
+            for gen_num, (fitness, genome) in enumerate(zip(self.best_fitness_history, self.best_genome_history)):
+                genome_tuple = tuple(genome)  # Convert to tuple for comparison
+                if genome_tuple not in existing_genomes:
+                    new_genomes_to_save.append([gen_num, fitness] + list(genome))
+                    existing_genomes.add(genome_tuple)  # Mark as saved
+
+            if not new_genomes_to_save:
+                print("No new unique genomes to save")
+                return
+
+            # Write to file (append mode)
+            write_header = not os.path.exists(filename)
+            with open(filename, 'a', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerows(rows)
-                
-            print(f"Saved {len(sorted_pairs)} genomes to {filename}")
-            
+                if write_header:
+                    writer.writerow(header)
+                writer.writerows(new_genomes_to_save)
+
+            print(f"Saved {len(new_genomes_to_save)} new unique genomes to {filename}")
+
         except Exception as e:
             print(f"Error saving genomes: {e}")
             import traceback
             traceback.print_exc()
+
     
     def load_best_genome(self):
-        """Load the best 20 genomes from CSV for a population of 100"""
+        """Load the top 20 unique genomes from CSV for a population of 100"""
         try:
-            filename = "result/best_genomes.csv"
+            filename = "result/NewBraking_2.csv"
             if not os.path.exists(filename):
                 return None
                 
             with open(filename, 'r') as f:
                 reader = csv.reader(f)
-                next(reader)  # Skip header
-                rows = [row for row in reader if row]
+                rows = [row for row in reader if row]  # Skip empty rows
                 
             if not rows:
                 return None
                 
-            # Parse rows and sort by fitness
-            valid_rows = []
+            # Parse rows, extract fitness and genome, and filter duplicates
+            unique_genomes = {}
             for row in rows:
                 try:
                     fitness = float(row[1])
-                    genome = np.array([float(gene) for gene in row[2:]])
-                    valid_rows.append((fitness, genome))
+                    genome = tuple(float(gene) for gene in row[2:])  # Convert to tuple (hashable)
+                    
+                    # Keep only the highest fitness version of each genome
+                    if genome not in unique_genomes or fitness > unique_genomes[genome][0]:
+                        unique_genomes[genome] = (fitness, np.array(genome))
                 except (ValueError, IndexError):
                     continue
                     
-            if not valid_rows:
+            if not unique_genomes:
                 return None
                 
-            # Sort by fitness (descending)
-            valid_rows.sort(key=lambda x: x[0], reverse=True)
+            # Sort genomes by fitness (descending)
+            sorted_genomes = sorted(unique_genomes.values(), key=lambda x: x[0], reverse=True)
             
-            # Take the top genome for return value
-            best_genome = valid_rows[0][1]
-            print(f"Loaded best genome with fitness {valid_rows[0][0]}")
+            # Take the best genome for return value
+            best_genome = sorted_genomes[0][1]
+            print(f"Loaded best unique genome with fitness {sorted_genomes[0][0]}")
             
-            # Store the top 20 genomes for population initialization
-            self.top_genomes = [genome for _, genome in valid_rows[:20]]
-            print(f"Loaded top {len(self.top_genomes)} genomes for population initialization")
+            # Store top 20 unique genomes for population initialization
+            self.top_genomes = [genome for _, genome in sorted_genomes[:20]]
+            print(f"Loaded {len(self.top_genomes)} unique top genomes")
             
             return best_genome
             
@@ -239,7 +263,7 @@ class Trainer:
             import traceback
             traceback.print_exc()
             return None
-    
+        
     def get_population(self):
         return self.population
     def initialize_population_with_top_genomes(self, input_size, hidden_layers, output_size):
@@ -258,7 +282,7 @@ class Trainer:
                 mutated_genome = self.mutate(parent_genome)  # Example mutation
                 self.population[i].set_genome(mutated_genome)
                 
-                # Optional: Add randomness for a subset (e.g., 20% of the remaining)
+              #  Optional: Add randomness for a subset (e.g., 20% of the remaining)
                 if np.random.rand() < 0.2:
                     self.population[i] = neuralNet(input_size, hidden_layers, output_size)
             
