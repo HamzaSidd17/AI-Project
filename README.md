@@ -89,4 +89,6 @@ Given our limited training time and compute, **Behaviour Cloning** emerged as th
 > _"Learning to drive in pixels and sensors – one crash at a time."_
 
 
+![image](https://github.com/user-attachments/assets/1948c31c-573b-4a88-a09f-3edda9b4cc74)
+![image](https://github.com/user-attachments/assets/5147d088-4f2b-4f14-ba43-585621512e81)
 
